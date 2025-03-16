@@ -1,100 +1,95 @@
 import torch
-from torch import nn 
+from sklearn.datasets import make_circles
+from sklearn.model_selection import train_test_split
+import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
-from pathlib import Path
-from pprint import pprint
+from torch import nn
+import requests
+from pathlib import Path 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Using device: {device}")
 
-class LinearRegressionModel(nn.Module):
+class CircleModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.linear_layer = nn.Linear(in_features=1,out_features=1)
+        self.layer_1 = nn.Linear(in_features=2,out_features=10)
+        self.layer_2 = nn.Linear(in_features=10,out_features=10)
+        self.layer_3 = nn.Linear(in_features=10,out_features=1)
+        self.relu = nn.ReLU()
+    
+    def forward(self, x):
+        return self.layer_3(self.relu(self.layer_2(self.relu(self.layer_1(x)))))
 
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
-        return self.linear_layer(x)
+n_samples = 1000
+X, y = make_circles(n_samples,noise=0.03,random_state=42)
+circles = pd.DataFrame({"X1":X[:,0],"X2":X[:,1],"label":y})
 
-#known info
-weight = 0.7
-bias = 0.3
+plt.scatter(x=X[:, 0], 
+            y=X[:, 1], 
+            c=y, 
+            cmap=plt.cm.RdYlBu)
 
-# Create data
-start = 0
-end = 1
-step = 0.02
-X = torch.arange(start, end, step).unsqueeze(dim=1)
-y = weight * X + bias
+X = torch.from_numpy(X).type(torch.float)
+y = torch.from_numpy(y).type(torch.float)
 
-# Create train/test split
-train_split = int(0.8 * len(X)) # 80% of data used for training set, 20% for testing 
-X_train, y_train = X[:train_split], y[:train_split]
-X_test, y_test = X[train_split:], y[train_split:]
+X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2,random_state=42)
 
-def plot_predictions(train_data=X_train, train_labels=y_train, test_data=X_test, test_labels=y_test, predictions=None):
-    """Plots training data, test data and compares predictions."""
+model_0 = CircleModel().to(device)
 
-    plt.figure(figsize=(10, 7))
-    plt.scatter(train_data, train_labels, c="b", s=4, label="Training data")
-    plt.scatter(test_data, test_labels, c="g", s=4, label="Testing data")
+loss_fn = nn.BCEWithLogitsLoss()
+optimizer = torch.optim.SGD(params=model_0.parameters(), lr=0.1)
 
-    if predictions is not None:
-        plt.scatter(test_data, predictions, c="r", s=4, label="Predictions")
-    plt.legend(prop={"size": 14})
+def accuracy_fn(y_true, y_pred):
+    correct = torch.eq(y_true,y_pred).sum().item()
+    acc = (correct / len(y_pred)) * 100
+    return acc
 
 torch.manual_seed(42)
 
-model_0 = LinearRegressionModel()
-model_0.to(device)
-
-# Create the loss function
-loss_fn = nn.L1Loss()
-
-# Create the optimizer
-optimizer = torch.optim.SGD(params=model_0.parameters(), lr=0.01)
-
+# Set the number of epochs
 epochs = 1000
 
-X_train = X_train.to(device)
-X_test = X_test.to(device)
-y_train = y_train.to(device)
-y_test = y_test.to(device)
+# Put data to target device
+X_train, y_train = X_train.to(device), y_train.to(device)
+X_test, y_test = X_test.to(device), y_test.to(device)
 
+# Build training and evaluation loop
 for epoch in range(epochs):
-    #training
+    # Training
     model_0.train()
-    y_pred = model_0(X_train)
-    loss = loss_fn(y_pred, y_train)
+    y_logits = model_0(X_train).squeeze() 
+    y_pred = torch.round(torch.sigmoid(y_logits)) 
+    loss = loss_fn(y_logits, y_train) 
+    acc = accuracy_fn(y_true=y_train, y_pred=y_pred) 
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
-    #testing
+    # Testing
     model_0.eval()
     with torch.inference_mode():
-        test_pred = model_0(X_test)
-        test_loss = loss_fn(test_pred, y_test)
+        test_logits = model_0(X_test).squeeze() 
+        test_pred = torch.round(torch.sigmoid(test_logits))
+        test_loss = loss_fn(test_logits, y_test)
+        test_acc = accuracy_fn(y_true=y_test, y_pred=test_pred)
 
-        if epoch % 100 == 0:
-            print(f"Epoch: {epoch} | Train Loss: {loss} | Test Loss: {test_loss} ")
+    if epoch % 100 == 0:
+        print(f"Epoch: {epoch} | Loss: {loss:.5f}, Accuracy: {acc:.2f}% | Test loss: {test_loss:.5f}, Test acc: {test_acc:.2f}%")
 
-print("The model learned the following values for weights and bias:")
-pprint(model_0.state_dict())
-print("\nAnd the original values for weights and bias are:")
-print(f"weights: {weight}, bias: {bias}")
+if Path("helper_functions.py").is_file():
+  print("helper_functions.py already exists, skipping download")
+else:
+  print("Downloading helper_functions.py")
+  request = requests.get("https://raw.githubusercontent.com/mrdbourke/pytorch-deep-learning/main/helper_functions.py")
+  with open("helper_functions.py", "wb") as f:
+    f.write(request.content)
 
-model_0.eval()
-with torch.inference_mode():
-    y_preds = model_0(X_test)
+from helper_functions import plot_predictions, plot_decision_boundary
 
-plot_predictions(predictions=y_preds.cpu())
-
-MODEL_PATH = Path("models")
-MODEL_PATH.mkdir(parents=True, exist_ok=True)
-
-MODEL_NAME = "01_pytorch_workflow_model_0.pth"
-MODEL_SAVE_PATH = MODEL_PATH / MODEL_NAME
-
-print(f"Saving model to: {MODEL_SAVE_PATH}")
-torch.save(obj=model_0.state_dict(),f=MODEL_SAVE_PATH)
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.title("Train")
+plot_decision_boundary(model_0, X_train, y_train)
+plt.subplot(1, 2, 2)
+plt.title("Test")
+plot_decision_boundary(model_0, X_test, y_test)
